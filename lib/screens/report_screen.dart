@@ -43,6 +43,12 @@ class ReportScreenState extends State<ReportScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(() => setState(() {}));
+    // refresh provider so any remote reports are pulled
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        context.read<PharmacyProvider>().loadData();
+      } catch (_) {}
+    });
   }
 
   Future<void> _pickDate(BuildContext context) async {

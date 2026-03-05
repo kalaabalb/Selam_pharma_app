@@ -83,5 +83,5 @@ flutter {
 dependencies {
     // Required for libraries that use newer Java APIs and need desugaring
     // Use a recent desugar_jdk_libs to satisfy plugin AAR requirements
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:1.2.2")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

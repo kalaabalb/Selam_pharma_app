@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:flutter_native_timezone/flutter_native_timezone.dart';
+import 'package:hive/hive.dart';
 import '../screens/trash_screen.dart';
 import '../screens/notification_screen.dart';
 
@@ -14,6 +15,50 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
   GlobalKey<NavigatorState>? navigatorKey;
+
+  /// Returns the current value of the user preference controlling whether
+  /// notifications should be shown at all. Defaults to true when the box is
+  /// not yet opened.
+  bool get _notificationsAllowed {
+    try {
+      final box = Hive.box('settings');
+      return box.get('notifications_enabled', defaultValue: true) as bool;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Public helper used by callers or tests to determine whether a notification
+  /// would actually be shown/scheduled.  If [payload] starts with
+  /// "trash:" and [isScheduled] is true, this also considers the per‑feature trash toggle.
+  bool areNotificationsAllowed({String? payload, bool isScheduled = false}) {
+    if (!_notificationsAllowed) return false;
+    if (payload != null && payload.startsWith('trash:') && isScheduled) {
+      try {
+        final box = Hive.box('settings');
+        final trashAllowed =
+            box.get('trash_notifications_enabled', defaultValue: true) as bool;
+        if (!trashAllowed) return false;
+      } catch (_) {
+        // ignore errors; default to allowing
+      }
+    }
+    return true;
+  }
+
+  /// Update the persisted preference and if notifications are being turned
+  /// off, cancel any pending notifications right away.
+  Future<void> setNotificationsEnabled(bool enabled) async {
+    try {
+      final box = Hive.box('settings');
+      await box.put('notifications_enabled', enabled);
+    } catch (_) {}
+    if (!enabled) {
+      try {
+        await cancelAll();
+      } catch (_) {}
+    }
+  }
 
   Future<void> initialize() async {
     if (_initialized) return;
@@ -28,9 +73,16 @@ class NotificationService {
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();
-    const initSettings = InitializationSettings(android: android, iOS: ios);
+    const linux = LinuxInitializationSettings(
+      defaultActionName: 'Open notification',
+    );
+    const initSettings = InitializationSettings(
+      android: android,
+      iOS: ios,
+      linux: linux,
+    );
     await _plugin.initialize(
-      initSettings,
+      settings: initSettings,
       onDidReceiveNotificationResponse: (details) async {
         final payload = details.payload;
         if (payload != null) {
@@ -61,8 +113,10 @@ class NotificationService {
     required String title,
     required String body,
     int id = 0,
+    String? payload,
   }) async {
     await initialize();
+    if (!areNotificationsAllowed(payload: payload)) return;
     final android = AndroidNotificationDetails(
       'shmed_chan',
       'App notifications',
@@ -70,12 +124,17 @@ class NotificationService {
       priority: Priority.high,
     );
     final ios = DarwinNotificationDetails();
+    final linux = LinuxNotificationDetails();
     await _plugin.show(
-      id,
-      title,
-      body,
-      NotificationDetails(android: android, iOS: ios),
-      payload: null,
+      id: id,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: android,
+        iOS: ios,
+        linux: linux,
+      ),
+      payload: payload,
     );
   }
 
@@ -88,6 +147,7 @@ class NotificationService {
     String? payload,
   }) async {
     await initialize();
+    if (!areNotificationsAllowed(payload: payload, isScheduled: true)) return;
     final ident = _idFor(notifId, offset);
     final android = AndroidNotificationDetails(
       'shmed_chan',
@@ -95,15 +155,18 @@ class NotificationService {
       importance: Importance.defaultImportance,
     );
     final ios = DarwinNotificationDetails();
+    final linux = LinuxNotificationDetails();
     await _plugin.zonedSchedule(
-      ident,
-      title,
-      body,
-      tz.TZDateTime.from(at, tz.local),
-      NotificationDetails(android: android, iOS: ios),
+      id: ident,
+      title: title,
+      body: body,
+      scheduledDate: tz.TZDateTime.from(at, tz.local),
+      notificationDetails: NotificationDetails(
+        android: android,
+        iOS: ios,
+        linux: linux,
+      ),
       payload: payload,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
     );
   }
@@ -114,7 +177,7 @@ class NotificationService {
     for (var offset = 0; offset < 3; offset++) {
       final id = _idFor(notifId, offset);
       try {
-        await _plugin.cancel(id);
+        await _plugin.cancel(id: id);
       } catch (_) {}
     }
   }

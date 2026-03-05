@@ -50,6 +50,16 @@ class HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(_filterMedicines);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _filterMedicines();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Filter medicines when provider changes
+    _filterMedicines();
   }
 
   @override
@@ -73,17 +83,8 @@ class HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // themeProvider not needed on this screen
-    final pharmacyProvider = context.watch<PharmacyProvider>();
-    final query = _searchController.text;
-    final selectedCategory = _categories[_selectedCategoryIndex];
-    _filteredMedicines = pharmacyProvider.searchMedicines(query).where((
-      medicine,
-    ) {
-      final medCategory = medicine.category ?? 'Others';
-      if (selectedCategory == 'All') return true;
-      return medCategory == selectedCategory;
-    }).toList();
+    // fetch provider once; filtering logic uses it directly
+    final pharmacyProvider = context.read<PharmacyProvider>();
 
     return Scaffold(
       drawer: AppDrawer(
@@ -100,6 +101,7 @@ class HomeScreenState extends State<HomeScreen> {
                 setState(() {
                   _selectedCategoryIndex = index;
                 });
+                _filterMedicines();
               }
             }
           });
@@ -207,6 +209,7 @@ class HomeScreenState extends State<HomeScreen> {
                       setState(() {
                         _selectedCategoryIndex = _categories.indexOf(category);
                       });
+                      _filterMedicines();
                     },
                     child: Container(
                       margin: const EdgeInsets.symmetric(horizontal: 2.0),
@@ -298,10 +301,11 @@ class HomeScreenState extends State<HomeScreen> {
                   )
                 : LayoutBuilder(
                     builder: (context, constraints) {
-                      final screenWidth = MediaQuery.of(context).size.width;
-                      final crossAxisCount = screenWidth > 600 ? 4 : 2;
+                      final width = constraints.maxWidth;
+                      final crossAxisCount = width > 600 ? 4 : 2;
                       return GridView.builder(
                         padding: const EdgeInsets.all(16.0),
+                        cacheExtent: 1000, // preload items for smoother scrolling
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: crossAxisCount,
                           crossAxisSpacing: 16.0,
@@ -583,6 +587,7 @@ class HomeScreenState extends State<HomeScreen> {
                 setState(() {
                   _selectedCategoryIndex = index;
                 });
+                _filterMedicines();
               }
             }
           });

@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:hive/hive.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
@@ -29,6 +30,16 @@ const _kDefaultGoogleServerClientId =
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   AuthCredential? _pendingCredential;
+
+  /// When true the top-level [AuthGate] will temporarily ignore
+  /// `authStateChanges` updates.  This is used by the login/register
+  /// UI so that the user isn't briefly bounced to the home screen during
+  /// an automatic sign‑in that immediately gets signed out (e.g. after
+  /// a new account is created).
+  ///
+  /// The flag is intentionally `static` so that it can be toggled from
+  /// anywhere without needing an instance reference.
+  static bool suppressAuthGate = false;
 
   // Read Google Web client ID from environment for safer configuration.
   // Priority: .env (flutter_dotenv) -> --dart-define(GOOGLE_SERVER_CLIENT_ID)
@@ -82,6 +93,10 @@ class AuthService {
         'AuthService.signInWithEmail: signed in uid=${cred.user?.uid}',
       );
     } catch (_) {}
+
+    // apply default settings for first-time logins on this device
+    await AuthService.applyDefaultSettingsIfMissing();
+
     return cred;
   }
 
@@ -112,7 +127,56 @@ class AuthService {
       );
     }
 
+    // make sure the newly-created account sees the standard defaults on
+    // this device.  We overwrite any existing values because this machine may
+    // have been used by a different user before; a fresh account should not
+    // inherit another person's preferences.
+    await AuthService.initializeSettingsForNewAccount();
+
     return cred;
+  }
+
+  /// Ensures that the local settings box contains sensible defaults.  Only
+  /// keys that are missing are touched; existing preferences will be preserved.
+  /// This is called after a normal sign‑in so that a "fresh" device (or one
+  /// where another user previously changed the settings) will present the
+  /// correct toggles when the existing user opens the settings page.
+  static Future<void> applyDefaultSettingsIfMissing() async {
+    try {
+      final box = Hive.box('settings');
+      if (!box.containsKey('notifications_enabled')) {
+        await box.put('notifications_enabled', true);
+      }
+      if (!box.containsKey('show_badges')) {
+        await box.put('show_badges', true);
+      }
+      if (!box.containsKey('trash_notifications_enabled')) {
+        await box.put('trash_notifications_enabled', true);
+      }
+      if (!box.containsKey('biometric_enabled')) {
+        await box.put('biometric_enabled', false);
+      }
+    } catch (_) {
+      // ignore failures – box may not be open, etc.
+    }
+  }
+
+  /// Called when a brand‑new account is created on this device.  In
+  /// addition to ensuring the settings exist, it *overwrites* whatever was
+  /// previously stored so that the new user doesn't inherit another person's
+  /// choices.  The registration flow invokes this method immediately after
+  /// successfully creating the user.
+  static Future<void> initializeSettingsForNewAccount() async {
+    await applyDefaultSettingsIfMissing();
+    try {
+      final box = Hive.box('settings');
+      await box.put('notifications_enabled', true);
+      await box.put('show_badges', true);
+      await box.put('trash_notifications_enabled', true);
+      await box.put('biometric_enabled', false);
+    } catch (_) {
+      // if Hive isn't available for whatever reason, just ignore
+    }
   }
 
   /// Deletes the current user's Firestore data (user doc and per-user

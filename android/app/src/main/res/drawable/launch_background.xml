@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Use a plain white background for the native launch screen so the
-         Flutter splash screen (rounded logo + app name) is shown immediately
-         when Flutter initializes. This removes the full-banner native image. -->
     <item>
-        <shape android:shape="rectangle">
-            <solid android:color="#FFFFFF" />
-        </shape>
+        <bitmap android:gravity="fill" android:src="@drawable/background"/>
+    </item>
+    <item>
+        <bitmap android:gravity="center" android:src="@drawable/splash"/>
     </item>
 </layer-list>

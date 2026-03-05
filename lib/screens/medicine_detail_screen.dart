@@ -43,6 +43,12 @@ class MedicineDetailScreenState extends State<MedicineDetailScreen> {
     _sellPriceController.text = widget.medicine.sellPrice.toString();
     _soldQtyController.clear(); // Reset quantity field for new sale
     _calculateAnalytics();
+    // make sure provider data is fresh (includes Firestore sync)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        context.read<PharmacyProvider>().loadData();
+      } catch (_) {}
+    });
   }
 
   void _loadMedicineReports() {
@@ -646,6 +652,14 @@ class MedicineDetailScreenState extends State<MedicineDetailScreen> {
     final theme = Theme.of(context);
     final textColor = theme.colorScheme.onSurface;
     final hintColor = theme.hintColor;
+
+    // recompute reports each time we rebuild so remote sync updates take effect
+    final providerReports = context.watch<PharmacyProvider>().reports;
+    _medicineReports =
+        providerReports
+            .where((r) => r.medicineName == _currentMedicine.name)
+            .toList()
+          ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
     final double realProfit =
         _medicineReports.fold<double>(

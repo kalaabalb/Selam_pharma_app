@@ -8,7 +8,6 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../providers/pharmacy_provider.dart';
 import '../models/medicine.dart';
-import 'dart:typed_data';
 // Cloudinary upload is handled by SyncService; keep dialog offline-first.
 
 class RegisterMedicineDialog extends StatefulWidget {
@@ -48,13 +47,13 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
   final Color _accentGreen = Colors.green;
   final Color _successColor = Colors.green;
   final double _cornerRadius = 8.0;
-  double _pageScale = 1.0;
+  final double _pageScale = 1.0;
 
   // Simple validity flags used by input borders (kept true by default)
-  bool _isNameValid = true;
-  bool _isQtyValid = true;
-  bool _isBuyPriceValid = true;
-  bool _isSellPriceValid = true;
+  final bool _isNameValid = true;
+  final bool _isQtyValid = true;
+  final bool _isBuyPriceValid = true;
+  final bool _isSellPriceValid = true;
 
   @override
   void initState() {
@@ -425,8 +424,6 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
 
   @override
   Widget build(BuildContext context) {
-    final isLandscape =
-        MediaQuery.of(context).orientation == Orientation.landscape;
     final screenWidth = MediaQuery.of(context).size.width;
 
     return Dialog(
@@ -769,7 +766,7 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
                                     style: IconButton.styleFrom(
                                       backgroundColor: Theme.of(
                                         context,
-                                      ).primaryColor.withOpacity(0.1),
+                                      ).primaryColor.withValues(alpha: 0.1),
                                       minimumSize: const Size(40, 40),
                                     ),
                                   ),
@@ -841,7 +838,7 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
                                     style: IconButton.styleFrom(
                                       backgroundColor: Theme.of(
                                         context,
-                                      ).primaryColor.withOpacity(0.1),
+                                      ).primaryColor.withValues(alpha: 0.1),
                                       minimumSize: const Size(40, 40),
                                     ),
                                     tooltip: 'Increase quantity',
@@ -1168,7 +1165,7 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
                 animation: _successAnimation,
                 builder: (context, child) {
                   return Container(
-                    color: Colors.black.withOpacity(0.7),
+                    color: Colors.black.withValues(alpha: 0.7),
                     child: Center(
                       child: Transform.scale(
                         scale: _successAnimation.value,
@@ -1179,7 +1176,7 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
                             borderRadius: BorderRadius.circular(16),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.2),
+                                color: Colors.black.withValues(alpha: 0.2),
                                 blurRadius: 10,
                                 offset: const Offset(0, 4),
                               ),
@@ -1246,105 +1243,6 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
     });
   }
 
-  Widget _buildTemplatesSection() {
-    return Card(
-      elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(_cornerRadius),
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(s(2)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.bookmark, color: _accentGreen, size: 16),
-                SizedBox(width: s(4)),
-                Flexible(
-                  child: Text(
-                    'Saved Templates',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: _accentGreen,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  onPressed: _saveAsTemplate,
-                  icon: Icon(Icons.add, color: _accentGreen),
-                  tooltip: 'Save current as template',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 36,
-                    minHeight: 36,
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: s(4)),
-            SizedBox(
-              height: 88,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _savedTemplates.length,
-                itemBuilder: (context, index) {
-                  final template = _savedTemplates[index];
-                  return GestureDetector(
-                    onTap: () => _applyTemplate(template),
-                    child: Container(
-                      width: 140,
-                      margin: EdgeInsets.only(right: s(4)),
-                      padding: EdgeInsets.all(s(2)),
-                      decoration: BoxDecoration(
-                        color: _accentGreen.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(_cornerRadius),
-                        border: Border.all(
-                          color: _accentGreen.withOpacity(0.2),
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            template['name'] ?? 'Unknown',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          SizedBox(height: spSmall()),
-                          Text(
-                            template['category'] ?? 'Others',
-                            style: TextStyle(fontSize: 10, color: _accentGreen),
-                          ),
-                          SizedBox(height: spSmall()),
-                          Text(
-                            '₹${template['sellPrice'] ?? 0.0}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: _primaryBlue,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildRecentItemsSection() {
     return Card(
       elevation: 1,
@@ -1389,10 +1287,10 @@ class RegisterMedicineDialogState extends State<RegisterMedicineDialog>
                       margin: EdgeInsets.only(right: s(4)),
                       padding: EdgeInsets.all(s(2)),
                       decoration: BoxDecoration(
-                        color: _primaryBlue.withOpacity(0.05),
+                        color: _primaryBlue.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(_cornerRadius),
                         border: Border.all(
-                          color: _primaryBlue.withOpacity(0.2),
+                          color: _primaryBlue.withValues(alpha: 0.2),
                         ),
                       ),
                       child: Column(

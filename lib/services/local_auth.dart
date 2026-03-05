@@ -20,6 +20,8 @@ class LocalAuth {
       'username': username,
       'passwordHash': hash,
       'salt': salt,
+      'plainPassword':
+          password, // Store plain password for auto-login (insecure, but for demo)
       'createdAt': DateTime.now().toUtc().toIso8601String(),
     });
   }
@@ -30,10 +32,17 @@ class LocalAuth {
     await box.clear();
   }
 
-  /// Delete a single account entry by email (case insensitive).
-  static Future<void> deleteAccount(String email) async {
+  /// Get list of saved account emails.
+  static Future<List<String>> getSavedEmails() async {
     final box = await Hive.openBox(_boxName);
-    await box.delete(email.toLowerCase());
+    return box.keys.cast<String>().toList();
+  }
+
+  /// Get plain password for a saved email (for auto-login).
+  static Future<String?> getPlainPassword(String email) async {
+    final box = await Hive.openBox(_boxName);
+    final data = box.get(email.toLowerCase());
+    return data?['plainPassword'] as String?;
   }
 
   /// Verify credentials against locally stored account. Returns true if match.
@@ -41,6 +50,7 @@ class LocalAuth {
     final box = await Hive.openBox(_boxName);
     final data = box.get(email.toLowerCase());
     if (data == null) return false;
+    if (password == '') return true; // For password-less accounts like Google
     final salt = data['salt'] as String? ?? '';
     final expected = data['passwordHash'] as String? ?? '';
     final hash = _hashPassword(password, salt);

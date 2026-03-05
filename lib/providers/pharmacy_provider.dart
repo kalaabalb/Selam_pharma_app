@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../models/medicine.dart';
 import '../services/notification_service.dart';
 import '../models/report.dart';
+import '../services/firestore_service.dart';
 import '../services/ai_service.dart';
 
 class PharmacyProvider extends ChangeNotifier {
@@ -14,6 +17,7 @@ class PharmacyProvider extends ChangeNotifier {
   Box<Report>? _reportTrashBox;
   Box<Report>? _reportBox;
   StreamSubscription<User?>? _authSub;
+  StreamSubscription<QuerySnapshot>? _reportsFireSub;
 
   List<Medicine> _medicines = [];
   List<Report> _reports = [];
@@ -45,29 +49,52 @@ class PharmacyProvider extends ChangeNotifier {
   }
 
   Future<void> loadData() async {
+    // called only when boxes are opened or a full refresh is required
     _medicines = _medicineBox?.values.toList() ?? [];
     _reports = _reportBox?.values.toList() ?? [];
+    // after loading local data, attempt to pull any remote reports
+    // (this may call loadData again if new items are appended).
+    await _syncReportsFromFirestore();
     notifyListeners();
   }
 
   Future<void> addMedicine(Medicine medicine) async {
     await _medicineBox?.put(medicine.id, medicine);
-    await loadData();
+    // keep in-memory list up to date without a full reload
+    _medicines.add(medicine);
+    notifyListeners();
   }
 
   Future<void> updateMedicine(Medicine medicine) async {
-    final oldMedicine = _medicines.firstWhere((m) => m.id == medicine.id);
-    if (oldMedicine.name != medicine.name) {
-      // Update medicine name in all reports
-      for (final report in _reports) {
-        if (report.medicineName == oldMedicine.name) {
-          report.medicineName = medicine.name;
-          await report.save();
+    final index = _medicines.indexWhere((m) => m.id == medicine.id);
+    if (index != -1) {
+      final oldMedicine = _medicines[index];
+      if (oldMedicine.name != medicine.name) {
+        // Update medicine name in all reports locally and remotely if possible
+        for (final report in _reports) {
+          if (report.medicineName == oldMedicine.name) {
+            report.medicineName = medicine.name;
+            await report.save();
+            // propagate change to firestore if we know the remote document id
+            if (report.remoteId != null && report.remoteId!.isNotEmpty) {
+              final uid = FirebaseAuth.instance.currentUser?.uid;
+              if (uid != null) {
+                try {
+                  await FirestoreService.update(
+                    'users/$uid/reports/${report.remoteId}',
+                    {'medicineName': medicine.name},
+                  );
+                } catch (_) {}
+              }
+            }
+          }
         }
       }
+      await medicine.save();
+      // update in-memory list directly
+      _medicines[index] = medicine;
+      notifyListeners();
     }
-    await medicine.save();
-    await loadData();
   }
 
   Future<void> deleteMedicine(Medicine medicine) async {
@@ -99,6 +126,7 @@ class PharmacyProvider extends ChangeNotifier {
           totalGain: report.totalGain,
           dateTime: report.dateTime,
           isRead: report.isRead,
+          remoteId: report.remoteId,
         );
         await _reportTrashBox?.add(clone);
         await report.delete();
@@ -127,8 +155,12 @@ class PharmacyProvider extends ChangeNotifier {
       await _trashBox?.put(clone.id, clone);
     } catch (_) {}
     await medicine.delete();
-    await loadData();
-    // schedule notifications: 2 days left, 1 day left, and final deletion notice
+    // remove from the in-memory list and notify listeners
+    _medicines.removeWhere((m) => m.id == medicine.id);
+    notifyListeners();
+    // always ask the notification service to create trash-related alerts;
+    // it will internally check both the global and trash-specific flags and
+    // ignore the request if notifications are disabled.
     try {
       if (deletedAtMillis != null) {
         final deletedAt = DateTime.fromMillisecondsSinceEpoch(deletedAtMillis);
@@ -141,6 +173,7 @@ class PharmacyProvider extends ChangeNotifier {
           title: 'Moved to Trash',
           body:
               '${medicine.name} moved to Trash. It will be deleted in $trashRetentionDays days.',
+          payload: 'trash:${medicine.id}',
         );
         await NotificationService.instance.schedule(
           notifId: medicine.id,
@@ -221,6 +254,7 @@ class PharmacyProvider extends ChangeNotifier {
           totalGain: r.totalGain,
           dateTime: r.dateTime,
           isRead: r.isRead,
+          remoteId: r.remoteId,
         );
         await _reportBox?.add(clone);
         await r.delete();
@@ -242,6 +276,92 @@ class PharmacyProvider extends ChangeNotifier {
     try {
       await NotificationService.instance.cancelFor(id);
     } catch (_) {}
+  }
+
+  /// Set up a realtime listener on the Firestore reports collection so that
+  /// any remote additions, modifications or deletions are reflected locally.
+  Future<void> _attachReportsListener(String? uid) async {
+    // cancel existing subscription if any
+    await _reportsFireSub?.cancel();
+    _reportsFireSub = null;
+    if (uid == null) return;
+
+    final coll = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('reports');
+    _reportsFireSub = coll.snapshots().listen(
+      (snap) async {
+        bool changed = false;
+        for (final change in snap.docChanges) {
+          final data = change.doc.data();
+          if (data == null) continue;
+          final remoteId = change.doc.id;
+          switch (change.type) {
+            case DocumentChangeType.added:
+              if (!_reports.any((r) => r.remoteId == remoteId)) {
+                final report = Report(
+                  medicineName: data['medicineName'] as String? ?? '',
+                  soldQty: (data['soldQty'] as num?)?.toInt() ?? 0,
+                  sellPrice: (data['sellPrice'] as num?)?.toInt() ?? 0,
+                  totalGain: (data['totalGain'] as num?)?.toInt() ?? 0,
+                  dateTime: (data['dateTime'] is Timestamp)
+                      ? (data['dateTime'] as Timestamp).toDate()
+                      : DateTime.tryParse(data['dateTime']?.toString() ?? '') ??
+                            DateTime.now(),
+                  isRead: data['isRead'] as bool? ?? false,
+                  remoteId: remoteId,
+                );
+                await _reportBox?.add(report);
+                changed = true;
+              }
+              break;
+            case DocumentChangeType.modified:
+              Report? existing;
+              try {
+                existing = _reports.firstWhere((r) => r.remoteId == remoteId);
+              } catch (_) {
+                existing = null;
+              }
+              if (existing != null) {
+                existing.medicineName =
+                    data['medicineName'] as String? ?? existing.medicineName;
+                existing.soldQty =
+                    (data['soldQty'] as num?)?.toInt() ?? existing.soldQty;
+                existing.sellPrice =
+                    (data['sellPrice'] as num?)?.toInt() ?? existing.sellPrice;
+                existing.totalGain =
+                    (data['totalGain'] as num?)?.toInt() ?? existing.totalGain;
+                existing.dateTime = (data['dateTime'] is Timestamp)
+                    ? (data['dateTime'] as Timestamp).toDate()
+                    : existing.dateTime;
+                existing.isRead = data['isRead'] as bool? ?? existing.isRead;
+                await existing.save();
+                changed = true;
+              }
+              break;
+            case DocumentChangeType.removed:
+              Report? existing2;
+              try {
+                existing2 = _reports.firstWhere((r) => r.remoteId == remoteId);
+              } catch (_) {
+                existing2 = null;
+              }
+              if (existing2 != null) {
+                await existing2.delete();
+                changed = true;
+              }
+              break;
+          }
+        }
+        if (changed) {
+          await loadData();
+        }
+      },
+      onError: (e) {
+        debugPrint('PharmacyProvider: reports listener error: $e');
+      },
+    );
   }
 
   /// Number of days items are kept in trash before permanent deletion.
@@ -289,11 +409,82 @@ class PharmacyProvider extends ChangeNotifier {
     if (toRemove.isNotEmpty) await loadData();
   }
 
+  /// Fetch reports that exist in Firestore but not yet in the local Hive box.
+  ///
+  /// This is called whenever we open the boxes for a user or explicitly when
+  /// loading data. It will append any missing reports to the Hive box (with
+  /// their remoteId recorded) so that subsequent local queries return a
+  /// combined view. If new items are added the provider will notify listeners
+  /// again so the UI can refresh.
+  Future<void> _syncReportsFromFirestore() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    try {
+      final coll = FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('reports');
+      final snap = await coll.get();
+      bool addedAny = false;
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final remoteId = doc.id;
+        // skip if we already have this report by remoteId
+        if (_reports.any((r) => r.remoteId == remoteId)) continue;
+        final report = Report(
+          medicineName: data['medicineName'] as String? ?? '',
+          soldQty: (data['soldQty'] as num?)?.toInt() ?? 0,
+          sellPrice: (data['sellPrice'] as num?)?.toInt() ?? 0,
+          totalGain: (data['totalGain'] as num?)?.toInt() ?? 0,
+          dateTime: (data['dateTime'] is Timestamp)
+              ? (data['dateTime'] as Timestamp).toDate()
+              : DateTime.tryParse(data['dateTime']?.toString() ?? '') ??
+                    DateTime.now(),
+          isRead: data['isRead'] as bool? ?? false,
+          remoteId: remoteId,
+        );
+        await _reportBox?.add(report);
+        addedAny = true;
+      }
+      if (addedAny) {
+        await loadData();
+      }
+    } catch (e) {
+      debugPrint('PharmacyProvider: _syncReportsFromFirestore failed: $e');
+    }
+  }
+
+  /// Push a single report to Firestore and update its remoteId when the
+  /// document has been created. Failures are logged but do not crash the app.
+  Future<void> _syncReportToFirestore(Report report) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    try {
+      final map = {
+        'medicineName': report.medicineName,
+        'soldQty': report.soldQty,
+        'sellPrice': report.sellPrice,
+        'totalGain': report.totalGain,
+        'dateTime': report.dateTime,
+        'isRead': report.isRead ?? false,
+      };
+      final ref = await FirestoreService.add('users/$uid/reports', map);
+      report.remoteId = ref.id;
+      await report.save();
+    } catch (e) {
+      debugPrint('PharmacyProvider: failed to sync report to firestore: $e');
+    }
+  }
+
   Future<void> addReport(Report report) async {
     if (!_initialized) {
       await initBoxes();
     }
     await _reportBox?.add(report);
+    // try to push new report to Firestore in background
+    unawaited(_syncReportToFirestore(report));
     await loadData();
   }
 
@@ -308,7 +499,17 @@ class PharmacyProvider extends ChangeNotifier {
   }
 
   Future<void> removeReport(Report report) async {
+    // delete locally first
     await report.delete();
+    // also delete from firestore if we know the remote id
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && report.remoteId != null && report.remoteId!.isNotEmpty) {
+      try {
+        await FirestoreService.delete('users/$uid/reports/${report.remoteId}');
+      } catch (e) {
+        debugPrint('PharmacyProvider: failed to delete remote report: $e');
+      }
+    }
     await loadData();
   }
 
@@ -319,7 +520,15 @@ class PharmacyProvider extends ChangeNotifier {
         .toList();
     for (final r in toRemove) {
       try {
+        // delete local copy
         await r.delete();
+        // if we have a remoteId also remove from Firestore
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null && r.remoteId != null && r.remoteId!.isNotEmpty) {
+          try {
+            await FirestoreService.delete('users/$uid/reports/${r.remoteId}');
+          } catch (_) {}
+        }
       } catch (_) {}
     }
     await loadData();
@@ -341,6 +550,9 @@ class PharmacyProvider extends ChangeNotifier {
       debugPrint('PharmacyProvider: error closing boxes: $e');
     }
 
+    // cancel previous firestore listener before opening new boxes
+    _reportsFireSub?.cancel();
+
     _medicineBox = await Hive.openBox<Medicine>(medsName);
     _reportBox = await Hive.openBox<Report>(reportsName);
     // open a per-user trash box for soft-deleted medicines
@@ -350,11 +562,16 @@ class PharmacyProvider extends ChangeNotifier {
     _trashBox = await Hive.openBox<Medicine>(trashName);
     await _cleanupTrash();
     await loadData();
+    // attempt to pull any remote reports and merge into local storage
+    await _syncReportsFromFirestore();
+    // start listening to remote report changes for this user
+    await _attachReportsListener(uid);
   }
 
   @override
   void dispose() {
     _authSub?.cancel();
+    _reportsFireSub?.cancel();
     try {
       _medicineBox?.close();
       _reportBox?.close();
@@ -474,7 +691,7 @@ class PharmacyProvider extends ChangeNotifier {
     if (to != null) {
       reportsForMed = reportsForMed.where((r) => r.dateTime.isBefore(to));
     }
-    return reportsForMed.fold(0, (sum, r) => sum + r.soldQty);
+    return reportsForMed.fold(0, (acc, r) => acc + r.soldQty);
   }
 
   int profitFor(String medicineName, {DateTime? from, DateTime? to}) {
@@ -485,7 +702,7 @@ class PharmacyProvider extends ChangeNotifier {
     if (to != null) {
       reportsForMed = reportsForMed.where((r) => r.dateTime.isBefore(to));
     }
-    return reportsForMed.fold(0, (sum, r) => sum + r.totalGain);
+    return reportsForMed.fold(0, (acc, r) => acc + r.totalGain);
   }
 
   DateTimeRange? _extractDateRangeFromQuery(String query) {

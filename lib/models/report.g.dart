@@ -23,13 +23,14 @@ class ReportAdapter extends TypeAdapter<Report> {
       totalGain: fields[3] as int,
       dateTime: fields[4] as DateTime,
       isRead: fields[5] as bool?,
+      remoteId: fields[6] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Report obj) {
     writer
-      ..writeByte(6)
+      ..writeByte(7)
       ..writeByte(0)
       ..write(obj.medicineName)
       ..writeByte(1)
@@ -41,7 +42,9 @@ class ReportAdapter extends TypeAdapter<Report> {
       ..writeByte(4)
       ..write(obj.dateTime)
       ..writeByte(5)
-      ..write(obj.isRead);
+      ..write(obj.isRead)
+      ..writeByte(6)
+      ..write(obj.remoteId);
   }
 
   @override

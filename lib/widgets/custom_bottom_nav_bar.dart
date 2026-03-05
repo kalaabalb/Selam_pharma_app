@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 const Color _kPrimary = Color(0xFF007BFF);
 const Color _kMuted = Color(0xFF6C757D);
@@ -33,6 +34,7 @@ class CustomBottomNavBar extends StatelessWidget {
     required String label,
     required VoidCallback onTap,
     int badgeCount = 0,
+    bool showBadges = true,
   }) {
     final active = selectedIndex == index;
     const iconSize = 24.0;
@@ -65,7 +67,7 @@ class CustomBottomNavBar extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (badgeCount > 0)
+                  if (showBadges && badgeCount > 0)
                     Positioned(
                       right: 0,
                       top: -2,
@@ -116,75 +118,94 @@ class CustomBottomNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final newReports = (pharmacyProvider?.newReportsCount ?? 0) as int;
-    return BottomAppBar(
-      elevation: 8,
-      color: Theme.of(context).scaffoldBackgroundColor,
-      child: Container(
-        height: 64 + bottomInset,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: [
-            _buildItem(
-              context: context,
-              index: 0,
-              outlined: Icons.home_outlined,
-              filled: Icons.home,
-              label: 'Home',
-              onTap: onHome,
-            ),
-            _buildItem(
-              context: context,
-              index: 1,
-              outlined: Icons.chat_bubble_outline,
-              filled: Icons.chat_bubble,
-              label: 'Chat',
-              onTap: onChat,
-            ),
-            SizedBox(
-              width: 76,
-              child: Center(
-                child: InkWell(
-                  onTap: onRegister,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: _kPrimary,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withAlpha((0.12 * 255).round()),
-                          blurRadius: 6,
-                          offset: const Offset(0, 3),
+    final settingsBox = Hive.box('settings');
+
+    // listen so that toggling the badge preference rebuilds the bar
+    return ValueListenableBuilder<Box>(
+      valueListenable: settingsBox.listenable(keys: ['show_badges']),
+      builder: (context, box, _) {
+        final showBadges = box.get('show_badges', defaultValue: true) as bool;
+        return BottomAppBar(
+          elevation: 8,
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: Container(
+            height: 64 + bottomInset,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                _buildItem(
+                  context: context,
+                  index: 0,
+                  outlined: Icons.home_outlined,
+                  filled: Icons.home,
+                  label: 'Home',
+                  onTap: onHome,
+                  showBadges: showBadges,
+                ),
+                _buildItem(
+                  context: context,
+                  index: 1,
+                  outlined: Icons.chat_bubble_outline,
+                  filled: Icons.chat_bubble,
+                  label: 'Chat',
+                  onTap: onChat,
+                  showBadges: showBadges,
+                ),
+                SizedBox(
+                  width: 76,
+                  child: Center(
+                    child: InkWell(
+                      onTap: onRegister,
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: _kPrimary,
+                          borderRadius: BorderRadius.circular(14),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withAlpha(
+                                (0.12 * 255).round(),
+                              ),
+                              blurRadius: 6,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
                         ),
-                      ],
+                        child: const Icon(
+                          Icons.add,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                      ),
                     ),
-                    child: const Icon(Icons.add, color: Colors.white, size: 28),
                   ),
                 ),
-              ),
+                _buildItem(
+                  context: context,
+                  index: 2,
+                  outlined: Icons.bar_chart_outlined,
+                  filled: Icons.bar_chart,
+                  label: 'Reports',
+                  onTap: onReports,
+                  badgeCount: newReports,
+                  showBadges: showBadges,
+                ),
+                _buildItem(
+                  context: context,
+                  index: 3,
+                  outlined: Icons.assessment_outlined,
+                  filled: Icons.assessment,
+                  label: 'Audit',
+                  onTap: onAudit,
+                  showBadges: showBadges,
+                ),
+              ],
             ),
-            _buildItem(
-              context: context,
-              index: 2,
-              outlined: Icons.bar_chart_outlined,
-              filled: Icons.bar_chart,
-              label: 'Reports',
-              onTap: onReports,
-              badgeCount: newReports,
-            ),
-            _buildItem(
-              context: context,
-              index: 3,
-              outlined: Icons.assessment_outlined,
-              filled: Icons.assessment,
-              label: 'Audit',
-              onTap: onAudit,
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

@@ -7,6 +7,8 @@ import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import 'home_screen.dart';
 import '../widgets/auth_header.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -30,6 +32,25 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscureConfirm = true; // registration field
   String? _inlineError;
   Timer? _inlineErrorTimer;
+  final LocalAuthentication auth = LocalAuthentication();
+  bool _biometricEnabled = false;
+  bool _hasLocalAccount =
+      false; // track if we have any saved accounts for biometric login
+
+  @override
+  void initState() {
+    super.initState();
+    try {
+      final box = Hive.box('settings');
+      _biometricEnabled =
+          box.get('biometric_enabled', defaultValue: false) as bool;
+    } catch (_) {
+      _biometricEnabled = false;
+    }
+    // Check if we already have any accounts stored locally.  This is used to
+    // decide whether biometric login should even be offered.
+    _refreshHasLocalAccount();
+  }
 
   void _showError(Object e) {
     final msg = _auth.friendlyError(e);
@@ -62,6 +83,174 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  /// Loads the accounts box and updates [_hasLocalAccount].
+  Future<void> _refreshHasLocalAccount() async {
+    try {
+      final box = await Hive.openBox('accounts');
+      if (mounted) {
+        setState(() {
+          _hasLocalAccount = box.isNotEmpty;
+        });
+      }
+    } catch (_) {
+      // ignore errors here; treat as no accounts
+      if (mounted) {
+        setState(() {
+          _hasLocalAccount = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _authenticate() async {
+    try {
+      bool authenticated = await auth.authenticate(
+        localizedReason: 'Please authenticate to proceed',
+        biometricOnly: true,
+        persistAcrossBackgrounding: true,
+        // useErrorDialogs is removed in v3, handled by plugin
+      );
+      debugPrint('Biometric authentication result: $authenticated');
+      if (authenticated) {
+        // Check if we have any accounts stored locally
+        if (!_hasLocalAccount) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'No local account stored for biometric login. Please sign in manually.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+
+        // Auto-login with saved account
+        try {
+          // dump raw box contents for debugging
+          final box = await Hive.openBox('accounts');
+          final accountsMap = box.toMap();
+          debugPrint('accounts box map: $accountsMap');
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('accounts: $accountsMap')));
+          }
+
+          final emails = await LocalAuth.getSavedEmails();
+          debugPrint('Saved emails: $emails');
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('emails list: $emails')));
+          }
+          if (emails.isEmpty) {
+            debugPrint('No saved credentials for biometric auto-login');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Biometric success but no saved account. Please sign in manually.',
+                  ),
+                ),
+              );
+            }
+            return;
+          }
+
+          final email = emails.first; // Use the first saved account
+          final password = await LocalAuth.getPlainPassword(email);
+          debugPrint(
+            'Retrieved password for $email: ${password != null ? 'yes' : 'no'}',
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('password present: ${password != null}')),
+            );
+          }
+          if (password != null) {
+            // verify local credentials first
+            bool credsOk = false;
+            try {
+              credsOk = await LocalAuth.verifyCredentials(email, password);
+            } catch (vErr) {
+              debugPrint('Local verify error: $vErr');
+            }
+            debugPrint('Local credentials valid: $credsOk');
+
+            // attempt firebase login (may fail offline)
+            try {
+              debugPrint('Attempting Firebase sign-in for $email');
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Signing in with $email')),
+                );
+              }
+              await _auth.signInWithEmail(email, password);
+              debugPrint('Firebase sign-in completed');
+            } catch (signErr) {
+              debugPrint('Firebase sign-in error: $signErr');
+              // continue; offline fallback below
+            }
+
+            User? u = FirebaseAuth.instance.currentUser;
+            debugPrint('Immediate currentUser after sign-in: ${u?.uid}');
+
+            if (u == null && credsOk) {
+              debugPrint('Offline fallback: using local credentials');
+            }
+
+            if (u != null || credsOk) {
+              final displayEmail = u?.email ?? email;
+              debugPrint('Navigation to HomeScreen for user $displayEmail');
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Signed in as $displayEmail')),
+                );
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => HomeScreen()),
+                  (route) => false,
+                );
+              }
+              return;
+            }
+          } else {
+            debugPrint('Password for saved email was null');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Saved password missing.')),
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint('Auto-login failed: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Auto-login exception: $e')));
+          }
+        }
+        // If auto-login failed or was incomplete, just show success message
+        debugPrint('Auto-login failed, showing success message');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Biometric authentication successful'),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Biometric authentication failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Biometric authentication failed: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     if (mounted) {
@@ -77,6 +266,13 @@ class _LoginScreenState extends State<LoginScreen> {
       debugPrint(
         'LoginScreen._submit: attempt register for ${_emailCtrl.text.trim()}',
       );
+
+      // set a flag so the global AuthGate won't react to the temporary
+      // sign-in that occurs during account creation.  Without this we often
+      // see the home screen flash briefly before the explicit sign-out below
+      // kicks in, which was confusing to testers.
+      AuthService.suppressAuthGate = true;
+
       try {
         final cred = await _auth.registerWithEmail(
           _emailCtrl.text.trim(),
@@ -106,6 +302,8 @@ class _LoginScreenState extends State<LoginScreen> {
             password: _passCtrl.text,
           );
           debugPrint('Saved account to Hive for offline login');
+          // ensure biometric button is enabled after first registration
+          _refreshHasLocalAccount();
         } catch (e) {
           debugPrint('Profile/local save error: $e');
         }
@@ -129,6 +327,8 @@ class _LoginScreenState extends State<LoginScreen> {
         _showError(e);
       } finally {
         if (mounted) setState(() => _loading = false);
+        // always clear the suppression flag no matter what happened
+        AuthService.suppressAuthGate = false;
       }
       return;
     }
@@ -230,8 +430,21 @@ class _LoginScreenState extends State<LoginScreen> {
               password: _passCtrl.text,
             );
             debugPrint('Saved account to Hive for offline login');
+            // debug contents of the box after saving
+            final box = await Hive.openBox('accounts');
+            final map = box.toMap();
+            debugPrint('accounts box after save: $map');
+            // now update the flag so the biometric button appears
+            _refreshHasLocalAccount();
           } catch (localErr) {
             debugPrint('Failed to save local account after sign-in: $localErr');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('failed saving local account: $localErr'),
+                ),
+              );
+            }
           }
 
           if (!mounted) return;
@@ -385,6 +598,20 @@ class _LoginScreenState extends State<LoginScreen> {
 
         if (!mounted) return;
         showAppSnackBar(context, 'Signed in as ${u.email}');
+        // Save local account for offline/biometric access
+        try {
+          final username = u.displayName ?? u.email!.split('@').first;
+          await LocalAuth.saveAccount(
+            email: u.email!,
+            username: username,
+            password: '', // No password for Google accounts
+          );
+          debugPrint('Saved Google account locally for offline access');
+          _refreshHasLocalAccount();
+        } catch (localErr) {
+          debugPrint('Failed to save Google account locally: $localErr');
+        }
+        if (!mounted) return;
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => HomeScreen()),
           (route) => false,
@@ -768,30 +995,61 @@ class _LoginScreenState extends State<LoginScreen> {
                           SizedBox(height: 18),
 
                           // Primary action button
-                          ElevatedButton(
-                            onPressed: _loading ? null : _submit,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: cs.primary,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              elevation: 4,
-                            ),
-                            child: _loading
-                                ? SizedBox(
-                                    height: 16,
-                                    width: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: _loading ? null : _submit,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: cs.primary,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
                                     ),
-                                  )
-                                : Text(
-                                    _isRegister ? 'Create account' : 'Log In',
-                                    style: TextStyle(fontSize: 14),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                    ),
+                                    elevation: 4,
                                   ),
+                                  child: _loading
+                                      ? SizedBox(
+                                          height: 16,
+                                          width: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : Text(
+                                          _isRegister
+                                              ? 'Create account'
+                                              : 'Log In',
+                                          style: TextStyle(fontSize: 14),
+                                        ),
+                                ),
+                              ),
+                            ],
                           ),
+
+                          SizedBox(height: 12),
+
+                          // Biometric authentication button (only on login, enabled in settings)
+                          if (!_isRegister && _biometricEnabled)
+                            Center(
+                              child: IconButton(
+                                onPressed: _authenticate,
+                                icon: const Icon(Icons.fingerprint, size: 32),
+                                tooltip: 'Biometric login',
+                                style: IconButton.styleFrom(
+                                  backgroundColor: theme.colorScheme.secondary,
+                                  foregroundColor:
+                                      theme.colorScheme.onSecondary,
+                                  padding: const EdgeInsets.all(16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
 
                           SizedBox(height: 12),
 

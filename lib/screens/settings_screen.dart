@@ -64,6 +64,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     try {
       _settingsBox = Hive.box('settings');
+      // load persisted values (use defaults when missing)
+      _notificationsEnabled =
+          _settingsBox?.get('notifications_enabled', defaultValue: true) ??
+          true;
+      _badgeEnabled =
+          _settingsBox?.get('show_badges', defaultValue: true) ?? true;
+      _biometricEnabled =
+          _settingsBox?.get('biometric_enabled', defaultValue: false) ?? false;
       _trashNotificationsEnabled =
           _settingsBox?.get(
             'trash_notifications_enabled',
@@ -71,8 +79,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ) ??
           true;
     } catch (_) {
+      // if Hive fails for any reason, fall back to defaults
+      _notificationsEnabled = true;
+      _badgeEnabled = true;
+      _biometricEnabled = false;
       _trashNotificationsEnabled = true;
     }
+
+    // make sure NotificationService respects the current setting even if
+    // this screen isn't shown right away.  We don't await here because
+    // initState can't be async; any failures are silently ignored.
+    NotificationService.instance
+        .setNotificationsEnabled(_notificationsEnabled)
+        .then((_) {
+          if (_notificationsEnabled && _trashNotificationsEnabled) {
+            _rescheduleTrashNotifications();
+          }
+        })
+        .catchError((_) {});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // reschedule trash notifications if enabled
+    if (_trashNotificationsEnabled) {
+      _rescheduleTrashNotifications();
+    }
+  }
+
+  Future<void> _rescheduleTrashNotifications() async {
+    // nothing to do if either master notifications or trash-specific setting
+    // are disabled; this method may be called in a few places so guard up
+    // front to avoid unnecessary work.
+    if (!(_notificationsEnabled && _trashNotificationsEnabled)) return;
+    try {
+      final prov = Provider.of<PharmacyProvider>(context, listen: false);
+      for (final med in prov.trashedMedicines) {
+        final deletedAt = med.deletedAtMillis != null
+            ? DateTime.fromMillisecondsSinceEpoch(med.deletedAtMillis!)
+            : DateTime.now();
+        final expireAt = deletedAt.add(Duration(days: prov.trashRetentionDays));
+        final twoDays = expireAt.subtract(const Duration(days: 2));
+        final oneDay = expireAt.subtract(const Duration(days: 1));
+        final finalAt = expireAt;
+        // immediate informative alert in case this item was trashed while
+        // notifications were disabled; users should at least see the moved
+        // message when they turn the feature back on.
+        await NotificationService.instance.showImmediate(
+          id: med.id.hashCode & 0x7fffffff,
+          title: 'Moved to Trash',
+          body:
+              '${med.name} is in Trash. It will be deleted in ${prov.trashRetentionDays} days.',
+          payload: 'trash:${med.id}',
+        );
+        await NotificationService.instance.schedule(
+          notifId: med.id,
+          offset: 0,
+          title: 'Expiring soon',
+          body: '${med.name} will be permanently deleted in 2 days.',
+          at: twoDays,
+          payload: 'trash:${med.id}',
+        );
+        await NotificationService.instance.schedule(
+          notifId: med.id,
+          offset: 1,
+          title: 'Expiring soon',
+          body: '${med.name} will be permanently deleted in 1 day.',
+          at: oneDay,
+          payload: 'trash:${med.id}',
+        );
+        await NotificationService.instance.schedule(
+          notifId: med.id,
+          offset: 2,
+          title: 'Deleted',
+          body: '${med.name} has been permanently deleted from Trash.',
+          at: finalAt,
+          payload: 'trash:${med.id}',
+        );
+      }
+    } catch (_) {}
   }
 
   @override
@@ -152,7 +238,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   SwitchListTile(
                     value: _notificationsEnabled,
-                    onChanged: (v) => setState(() => _notificationsEnabled = v),
+                    onChanged: (v) async {
+                      setState(() => _notificationsEnabled = v);
+                      try {
+                        await NotificationService.instance
+                            .setNotificationsEnabled(v);
+                      } catch (_) {}
+                    },
                     title: Text('Enable notifications', style: titleStyle),
                     subtitle: Text(
                       'Show notifications and badges',
@@ -161,7 +253,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   SwitchListTile(
                     value: _badgeEnabled,
-                    onChanged: (v) => setState(() => _badgeEnabled = v),
+                    onChanged: (v) async {
+                      setState(() => _badgeEnabled = v);
+                      try {
+                        await _settingsBox?.put('show_badges', v);
+                      } catch (_) {}
+                    },
                     title: Text('Show badges', style: titleStyle),
                   ),
                   SwitchListTile(
@@ -172,58 +269,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       try {
                         _settingsBox?.put('trash_notifications_enabled', v);
                       } catch (_) {}
-                      // if disabling, cancel scheduled notifications for trashed items
                       final prov = Provider.of<PharmacyProvider>(
                         context,
                         listen: false,
                       );
                       if (!v) {
+                        // cancel any existing alerts when the user disables the
+                        // feature; the global toggle is irrelevant here since
+                        // NotificationService.cancelAll() would have already
+                        // removed them when notifications were turned off.
                         for (final med in prov.trashedMedicines) {
                           await NotificationService.instance.cancelFor(med.id);
                         }
                       } else {
-                        // schedule notifications for existing trashed items
-                        for (final med in prov.trashedMedicines) {
-                          final deletedAt = med.deletedAtMillis != null
-                              ? DateTime.fromMillisecondsSinceEpoch(
-                                  med.deletedAtMillis!,
-                                )
-                              : DateTime.now();
-                          final expireAt = deletedAt.add(
-                            Duration(days: prov.trashRetentionDays),
-                          );
-                          final twoDays = expireAt.subtract(
-                            const Duration(days: 2),
-                          );
-                          final oneDay = expireAt.subtract(
-                            const Duration(days: 1),
-                          );
-                          try {
-                            await NotificationService.instance.schedule(
-                              notifId: med.id,
-                              offset: 0,
-                              title: 'Expiring soon',
-                              body:
-                                  '${med.name} will be permanently deleted in 2 days.',
-                              at: twoDays,
-                            );
-                            await NotificationService.instance.schedule(
-                              notifId: med.id,
-                              offset: 1,
-                              title: 'Expiring soon',
-                              body:
-                                  '${med.name} will be permanently deleted in 1 day.',
-                              at: oneDay,
-                            );
-                            await NotificationService.instance.schedule(
-                              notifId: med.id,
-                              offset: 2,
-                              title: 'Deleted',
-                              body:
-                                  '${med.name} has been permanently deleted from Trash.',
-                              at: expireAt,
-                            );
-                          } catch (_) {}
+                        // schedule reminders for all trashed medicines; the
+                        // service will silently ignore them if the global
+                        // master switch is off.
+                        if (_notificationsEnabled) {
+                          _rescheduleTrashNotifications();
                         }
                       }
                     },
@@ -254,7 +317,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   SwitchListTile(
                     value: _biometricEnabled,
-                    onChanged: (v) => setState(() => _biometricEnabled = v),
+                    onChanged: (v) async {
+                      setState(() => _biometricEnabled = v);
+                      try {
+                        await _settingsBox?.put('biometric_enabled', v);
+                      } catch (_) {}
+                    },
                     title: Text('Use biometric unlock', style: titleStyle),
                   ),
                 ],
@@ -290,7 +358,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         builder: (context) => AlertDialog(
                           title: Text('Clear cache?', style: headerStyle),
                           content: Text(
-                            'This will remove temporary data. Continue?',
+                            'This will remove temporary data, including any saved login accounts used for offline or biometric authentication. Continue?',
                             style: titleStyle,
                           ),
                           actions: [
@@ -311,9 +379,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ],
                         ),
                       );
-                      if (!mounted) return;
-                      if (ok == true) {
+                      if (!mounted || ok != true) return;
+                      try {
+                        // Clear chat cache
+                        final chatBox = Hive.box('chat');
+                        await chatBox.clear();
+                        // Clear local auth accounts
+                        await LocalAuth.clearAll();
                         showAppSnackBar(context, 'Cache cleared');
+                      } catch (e) {
+                        showAppSnackBar(
+                          context,
+                          'Failed to clear cache: $e',
+                          error: true,
+                        );
                       }
                     },
                   ),
@@ -357,32 +436,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     },
                   ),
-                  ListTile(
-                    leading: const Icon(Icons.login),
-                    title: Text('Sign in with Google (debug)', style: titleStyle),
-                    subtitle: Text('Trigger Google Sign-In for testing', style: subtitleStyle),
-                    onTap: () async {
-                      try {
-                        final cred = await AuthService().signInWithGoogle();
-                        if (!mounted) return;
-                        final user = cred?.user;
-                        showAppSnackBar(
-                          context,
-                          user != null
-                              ? 'Signed in: ${user.email ?? user.uid}'
-                              : 'Signed in',
-                        );
-                        Navigator.of(context).pushNamedAndRemoveUntil('/home', (r) => false);
-                      } catch (e) {
-                        if (!mounted) return;
-                        showAppSnackBar(
-                          context,
-                          'Google Sign-In failed: ${e.toString()}',
-                          error: true,
-                        );
-                      }
-                    },
-                  ),
+
                   ListTile(
                     leading: const Icon(Icons.person_remove_outlined),
                     title: Text('Delete account', style: titleStyle),

@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -22,10 +23,13 @@ import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await dotenv.load(fileName: ".env");
-  } catch (e) {
-    debugPrint('Warning: Could not load .env: $e');
+  // Only load .env on desktop platforms where the file is accessible
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    try {
+      await dotenv.load(fileName: ".env");
+    } catch (e) {
+      debugPrint('Warning: Could not load .env: $e');
+    }
   }
   try {
     await Firebase.initializeApp();
@@ -284,6 +288,16 @@ class _AuthGateState extends State<AuthGate> {
         }
 
         final user = snapshot.data;
+
+        // If the login/register screen has indicated that it is performing a
+        // registration flow, we want to continue showing the login UI even if
+        // a user object briefly appears.  This prevents a flash of HomeScreen
+        // when a newly-created account is automatically signed in and shortly
+        // afterwards signed out again.
+        if (AuthService.suppressAuthGate) {
+          return LoginScreen();
+        }
+
         if (user == null) return LoginScreen();
 
         return FutureBuilder<bool>(
