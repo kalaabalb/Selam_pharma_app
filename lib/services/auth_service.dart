@@ -5,7 +5,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:firebase_remote_config/firebase_remote_config.dart';
 
 // local offline-auth helpers
 import 'local_auth.dart';
@@ -43,11 +42,8 @@ class AuthService {
 
   // Read Google Web client ID from environment for safer configuration.
   // Priority: .env (flutter_dotenv) -> --dart-define(GOOGLE_SERVER_CLIENT_ID)
-  //          -> Firebase Remote Config (key: google_server_client_id)
   //          -> built-in default value above.
   // Example .env entry: GOOGLE_SERVER_CLIENT_ID=12345-abcde.apps.googleusercontent.com
-  // Remote config key can be added via the Firebase console for cases where you
-  // want to change the value without rebuilding the app.
   Future<String> _resolveGoogleServerClientId() async {
     // 1. dotenv file
     String? fromDotenv;
@@ -62,21 +58,11 @@ class AuthService {
     final fromDefine = const String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
     if (fromDefine.isNotEmpty) return fromDefine;
 
-    // 3. remote config
-    try {
-      final rc = FirebaseRemoteConfig.instance;
-      await rc.fetchAndActivate();
-      final rcVal = rc.getString('google_server_client_id');
-      if (rcVal.isNotEmpty) return rcVal;
-    } catch (_) {
-      // ignore errors and fall through
-    }
-
-    // 4. fallback to built-in default so sign-in works with the project's
+    // 3. fallback to built-in default so sign-in works with the project's
     // configured client id without requiring any developer setup.
     debugPrint(
       'Using embedded default Google Web client ID. To override, set '
-      'GOOGLE_SERVER_CLIENT_ID via .env, dart-define or remote config.',
+      'GOOGLE_SERVER_CLIENT_ID via .env or dart-define.',
     );
     return _kDefaultGoogleServerClientId;
   }
