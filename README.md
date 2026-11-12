@@ -1,29 +1,18 @@
 # SHMed
 
-A new Flutter project.
+SHMed is a Flutter pharmacy management app. The repository includes authentication, pharmacy inventory and reporting flows, Hive-backed local data, Firebase integration, notifications, and an optional medicine recommendation workflow. See the source and dependency manifest for the current implementation.
 
-## Getting Started
+## Requirements
 
-This project is a starting point for a Flutter application.
+- Flutter and Dart versions compatible with `pubspec.yaml`
+- Firebase project configuration for Firebase features
+- A local `.env` file for optional desktop configuration; use `.env.sample` as a template and never commit real credentials
 
-A few resources to get you started if this is your first Flutter project:
+## Run locally
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+```bash
+flutter pub get
+flutter run
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-
-## AI Integration
-
-This app supports an AI-powered medicine recommendation workflow. To enable it:
-
-- Add your OpenAI-style API key to a `.env` file at the project root (see `.env.sample`).
-- Do NOT commit `.env` to source control.
-- Run `flutter pub get` after updating dependencies.
-
-Security notes:
-
-- Never hardcode or share your API key. Keep it in `.env` and out of Git.
-- The AI feature is limited: it should only recommend medicines already present in the app's Hive database. Validate AI responses before showing them to users.
+Configure platform-specific Firebase files before launching features that require Firebase. Keep API credentials out of source control.
