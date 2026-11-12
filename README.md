@@ -16,3 +16,10 @@ flutter run
 ```
 
 Configure platform-specific Firebase files before launching features that require Firebase. Keep API credentials out of source control.
+
+
+## AI integration and credentials
+
+The optional medicine recommendation feature should be limited to medicines already stored in the app’s Hive database. Validate any generated recommendation before presenting it to a user.
+
+For desktop builds, the app can load local configuration from `.env`; use `.env.sample` as the template. Keep real API keys and other credentials out of source control, and never commit a populated `.env` file.
